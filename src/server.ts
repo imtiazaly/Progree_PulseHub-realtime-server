@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import { env } from "./config/env.js";
 import { logger } from "./infrastructure/logging/logger.js";
 import { redisClient } from "./infrastructure/redis/redis.js";
+import { joinChannelSchema } from "./realtime/schemas.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -22,6 +23,30 @@ io.on("connection", async (socket) => {
 
   logger.info({ socketId: socket.id }, "Client connected");
 
+  socket.on("channel:join", async (payload, callback) => {
+    const result = joinChannelSchema.safeParse(payload);
+
+    if (!result.success) {
+      callback?.({ success: false, error: "Invalid channel name" });
+      return;
+    }
+
+    await socket.join(result.data.channel);
+    callback?.({ success: true, channel: result.data.channel });
+  });
+
+  socket.on("channel:leave", async (payload, callback) => {
+    const result = joinChannelSchema.safeParse(payload);
+
+    if (!result.success) {
+      callback?.({ success: false, error: "Invalid channel name" });
+      return;
+    }
+
+    await socket.leave(result.data.channel);
+    callback?.({ success: true, channel: result.data.channel });
+  });
+
   socket.on("disconnect", async (reason) => {
     await redisClient.sRem("pulsehub:active-users", socket.id);
 
@@ -35,7 +60,6 @@ logger.info("Redis connected successfully");
 httpServer.listen(env.PORT, env.HOST, () => {
   logger.info({ host: env.HOST, port: env.PORT }, "PulseHub server started");
 });
-
 
 let isShuttingDown = false;
 
