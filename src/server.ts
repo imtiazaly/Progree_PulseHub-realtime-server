@@ -38,9 +38,11 @@ app.get("/health", (_req, res) => {
 });
 
 io.on("connection", async (socket) => {
-  await redisClient.sAdd("pulsehub:active-users", socket.id);
+  const userId = socket.data.userId as string;
+  await redisClient.sAdd(`pulsehub:user:${userId}:connections`, socket.id);
+  await redisClient.sAdd("pulsehub:active-users", userId);
 
-  logger.info({ socketId: socket.id }, "Client connected");
+  logger.info({ socketId: socket.id, userId }, "Client connected");
 
   socket.on("channel:join", async (payload, callback) => {
     const result = joinChannelSchema.safeParse(payload);
@@ -93,7 +95,7 @@ io.on("connection", async (socket) => {
         {
           channel,
           content,
-          senderId: socket.id,
+          senderId: userId,
           timestamp,
         },
       );
@@ -102,7 +104,7 @@ io.on("connection", async (socket) => {
         messageId,
         channel,
         content,
-        senderId: socket.id,
+        senderId: userId,
         timestamp,
       });
 
@@ -118,9 +120,24 @@ io.on("connection", async (socket) => {
   });
 
   socket.on("disconnect", async (reason) => {
-    await redisClient.sRem("pulsehub:active-users", socket.id);
+    try {
+      await redisClient.sRem(`pulsehub:user:${userId}:connections`, socket.id);
 
-    logger.info({ socketId: socket.id, reason }, "Client disconnected");
+      const remainingConnections = await redisClient.sCard(
+        `pulsehub:user:${userId}:connections`,
+      );
+
+      if (remainingConnections === 0) {
+        await redisClient.sRem("pulsehub:active-users", userId);
+      }
+    } catch (error) {
+      logger.error(
+        { err: error, socketId: socket.id, userId, reason },
+        "Disconnect cleanup failed",
+      );
+    }
+
+    logger.info({ socketId: socket.id, userId, reason }, "Client disconnected");
   });
 });
 
