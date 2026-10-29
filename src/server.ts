@@ -12,10 +12,14 @@ import {
 } from "./realtime/schemas.js";
 import { verifyAccessToken } from "./realtime/auth.js";
 import { isMessageRateLimited } from "./realtime/rate-limit.js";
+import { createAdapter } from "@socket.io/redis-adapter";
 
 export const app = express();
 export const httpServer = createServer(app);
 export const io = new Server(httpServer);
+
+let pubClient: ReturnType<typeof redisClient.duplicate> | null = null;
+let subClient: ReturnType<typeof redisClient.duplicate> | null = null;
 
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
@@ -252,6 +256,15 @@ export async function startServer(): Promise<void> {
     httpServer.listen(env.PORT, env.HOST);
   });
 
+  pubClient = redisClient.duplicate();
+  subClient = redisClient.duplicate();
+
+  await Promise.all([pubClient.connect(), subClient.connect()]);
+
+  io.adapter(createAdapter(pubClient, subClient));
+
+  logger.info("Redis Pub/Sub adapter configured");
+
   logger.info({ host: env.HOST, port: env.PORT }, "PulseHub server started");
 }
 
@@ -274,6 +287,8 @@ export async function shutdown(signal: NodeJS.Signals): Promise<void> {
     }
 
     if (redisClient.isOpen) {
+      if (pubClient?.isOpen) await pubClient.quit();
+      if (subClient?.isOpen) await subClient.quit();
       await redisClient.quit();
     }
 
