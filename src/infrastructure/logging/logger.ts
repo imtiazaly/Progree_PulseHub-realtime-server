@@ -1,17 +1,24 @@
 import pino from "pino";
 import { env } from "../../config/env.js";
 
-export const logger = pino({
-  level: env.LOG_LEVEL,
-  timestamp: pino.stdTimeFunctions.isoTime,
-  redact: {
-    paths: [
-      "password",
-      "token",
-      "authorization",
-      "cookie",
-      "headers.authorization",
-    ],
-    censor: "[REDACTED]",
+export const logger = pino(
+  {
+    level: env.LOG_LEVEL,
+    timestamp: pino.stdTimeFunctions.isoTime,
+    redact: {
+      paths: [
+        "password",
+        "token",
+        "authorization",
+        "cookie",
+        "headers.authorization",
+      ],
+      censor: "[REDACTED]",
+    },
   },
-});
+  pino.destination({
+    dest: "./logs/pulsehub.log",
+    sync: false,
+    mkdir: true,
+  }),
+);

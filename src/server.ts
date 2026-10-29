@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import { createServer } from "node:http";
 import { Server } from "socket.io";
@@ -10,6 +11,7 @@ import {
   sendMessageSchema,
 } from "./realtime/schemas.js";
 import { verifyAccessToken } from "./realtime/auth.js";
+import { isMessageRateLimited } from "./realtime/rate-limit.js";
 
 export const app = express();
 export const httpServer = createServer(app);
@@ -154,6 +156,14 @@ io.on("connection", (socket) => {
         callback?.({
           success: false,
           error: "Join the channel before sending messages",
+        });
+        return;
+      }
+
+      if (isMessageRateLimited(userId)) {
+        callback?.({
+          success: false,
+          error: "Rate limit exceeded. Try again later.",
         });
         return;
       }
