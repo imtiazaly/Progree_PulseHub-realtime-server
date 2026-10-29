@@ -4,7 +4,7 @@ import { Server } from "socket.io";
 import { env } from "./config/env.js";
 import { logger } from "./infrastructure/logging/logger.js";
 import { redisClient } from "./infrastructure/redis/redis.js";
-import { joinChannelSchema } from "./realtime/schemas.js";
+import { joinChannelSchema, sendMessageSchema } from "./realtime/schemas.js";
 
 const app = express();
 const httpServer = createServer(app);
@@ -45,6 +45,57 @@ io.on("connection", async (socket) => {
 
     await socket.leave(result.data.channel);
     callback?.({ success: true, channel: result.data.channel });
+  });
+
+  socket.on("message:send", async (payload, callback) => {
+    const result = sendMessageSchema.safeParse(payload);
+
+    if (!result.success) {
+      callback?.({ success: false, error: "Invalid message payload" });
+      return;
+    }
+
+    const { channel, content } = result.data;
+
+    if (!socket.rooms.has(channel)) {
+      callback?.({
+        success: false,
+        error: "Join the channel before sending messages",
+      });
+      return;
+    }
+
+    try {
+      const timestamp = new Date().toISOString();
+
+      const messageId = await redisClient.xAdd(
+        `pulsehub:channel:${channel}:messages`,
+        "*",
+        {
+          channel,
+          content,
+          senderId: socket.id,
+          timestamp,
+        },
+      );
+
+      io.to(channel).emit("message:receive", {
+        messageId,
+        channel,
+        content,
+        senderId: socket.id,
+        timestamp,
+      });
+
+      callback?.({ success: true, messageId });
+    } catch (error) {
+      logger.error(
+        { err: error, socketId: socket.id, channel },
+        "Message processing failed",
+      );
+
+      callback?.({ success: false, error: "Failed to send message" });
+    }
   });
 
   socket.on("disconnect", async (reason) => {
