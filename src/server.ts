@@ -35,3 +35,36 @@ logger.info("Redis connected successfully");
 httpServer.listen(env.PORT, env.HOST, () => {
   logger.info({ host: env.HOST, port: env.PORT }, "PulseHub server started");
 });
+
+
+let isShuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  logger.info({ signal }, "Graceful shutdown started");
+
+  try {
+    await new Promise<void>((resolve) => {
+      io.close(() => resolve());
+    });
+
+    if (redisClient.isOpen) {
+      await redisClient.quit();
+    }
+
+    logger.info("PulseHub shut down successfully");
+  } catch (error) {
+    logger.error({ err: error }, "Graceful shutdown failed");
+    process.exitCode = 1;
+  }
+}
+
+process.once("SIGINT", () => {
+  void shutdown("SIGINT");
+});
+
+process.once("SIGTERM", () => {
+  void shutdown("SIGTERM");
+});
