@@ -7,10 +7,9 @@ import { redisClient } from "./infrastructure/redis/redis.js";
 import { joinChannelSchema, sendMessageSchema } from "./realtime/schemas.js";
 import { verifyAccessToken } from "./realtime/auth.js";
 
-const app = express();
-const httpServer = createServer(app);
-
-const io = new Server(httpServer);
+export const app = express();
+export const httpServer = createServer(app);
+export const io = new Server(httpServer);
 
 io.use((socket, next) => {
   const token = socket.handshake.auth?.token;
@@ -22,7 +21,6 @@ io.use((socket, next) => {
 
   try {
     const user = verifyAccessToken(token);
-
     socket.data.userId = user.userId;
     next();
   } catch {
@@ -37,56 +35,78 @@ app.get("/health", (_req, res) => {
   });
 });
 
-io.on("connection", async (socket) => {
+io.on("connection", (socket) => {
   const userId = socket.data.userId as string;
-  await redisClient.sAdd(`pulsehub:user:${userId}:connections`, socket.id);
-  await redisClient.sAdd("pulsehub:active-users", userId);
 
-  logger.info({ socketId: socket.id, userId }, "Client connected");
-
-  socket.on("channel:join", async (payload, callback) => {
-    const result = joinChannelSchema.safeParse(payload);
-
-    if (!result.success) {
-      callback?.({ success: false, error: "Invalid channel name" });
+  void (async () => {
+    try {
+      await redisClient.sAdd(`pulsehub:user:${userId}:connections`, socket.id);
+      await redisClient.sAdd("pulsehub:active-users", userId);
+    } catch (error) {
+      logger.error(
+        { err: error, socketId: socket.id, userId },
+        "Connection tracking failed",
+      );
+      socket.disconnect(true);
       return;
     }
 
-    await socket.join(result.data.channel);
-    callback?.({ success: true, channel: result.data.channel });
+    logger.info({ socketId: socket.id, userId }, "Client connected");
+  })();
+
+  socket.on("channel:join", async (payload, callback) => {
+    try {
+      const result = joinChannelSchema.safeParse(payload);
+
+      if (!result.success) {
+        callback?.({ success: false, error: "Invalid channel name" });
+        return;
+      }
+
+      await socket.join(result.data.channel);
+      callback?.({ success: true, channel: result.data.channel });
+    } catch (error) {
+      logger.error({ err: error, socketId: socket.id }, "Channel join failed");
+      callback?.({ success: false, error: "Failed to join channel" });
+    }
   });
 
   socket.on("channel:leave", async (payload, callback) => {
-    const result = joinChannelSchema.safeParse(payload);
+    try {
+      const result = joinChannelSchema.safeParse(payload);
 
-    if (!result.success) {
-      callback?.({ success: false, error: "Invalid channel name" });
-      return;
+      if (!result.success) {
+        callback?.({ success: false, error: "Invalid channel name" });
+        return;
+      }
+
+      await socket.leave(result.data.channel);
+      callback?.({ success: true, channel: result.data.channel });
+    } catch (error) {
+      logger.error({ err: error, socketId: socket.id }, "Channel leave failed");
+      callback?.({ success: false, error: "Failed to leave channel" });
     }
-
-    await socket.leave(result.data.channel);
-    callback?.({ success: true, channel: result.data.channel });
   });
 
   socket.on("message:send", async (payload, callback) => {
-    const result = sendMessageSchema.safeParse(payload);
-
-    if (!result.success) {
-      callback?.({ success: false, error: "Invalid message payload" });
-      return;
-    }
-
-    const { channel, content } = result.data;
-
-    if (!socket.rooms.has(channel)) {
-      callback?.({
-        success: false,
-        error: "Join the channel before sending messages",
-      });
-      return;
-    }
-
     try {
+      const result = sendMessageSchema.safeParse(payload);
+
+      if (!result.success) {
+        callback?.({ success: false, error: "Invalid message payload" });
+        return;
+      }
+
+      const { channel, content } = result.data;
+
+      if (!socket.rooms.has(channel)) {
+        callback?.({
+          success: false,
+          error: "Join the channel before sending messages",
+        });
+        return;
+      }
+
       const timestamp = new Date().toISOString();
 
       const messageId = await redisClient.xAdd(
@@ -111,55 +131,86 @@ io.on("connection", async (socket) => {
       callback?.({ success: true, messageId });
     } catch (error) {
       logger.error(
-        { err: error, socketId: socket.id, channel },
+        { err: error, socketId: socket.id },
         "Message processing failed",
       );
-
       callback?.({ success: false, error: "Failed to send message" });
     }
   });
 
-  socket.on("disconnect", async (reason) => {
-    try {
-      await redisClient.sRem(`pulsehub:user:${userId}:connections`, socket.id);
+  socket.on("disconnect", (reason) => {
+    void (async () => {
+      try {
+        await redisClient.sRem(
+          `pulsehub:user:${userId}:connections`,
+          socket.id,
+        );
 
-      const remainingConnections = await redisClient.sCard(
-        `pulsehub:user:${userId}:connections`,
-      );
+        const remainingConnections = await redisClient.sCard(
+          `pulsehub:user:${userId}:connections`,
+        );
 
-      if (remainingConnections === 0) {
-        await redisClient.sRem("pulsehub:active-users", userId);
+        if (remainingConnections === 0) {
+          await redisClient.sRem("pulsehub:active-users", userId);
+        }
+      } catch (error) {
+        logger.error(
+          { err: error, socketId: socket.id, userId, reason },
+          "Disconnect cleanup failed",
+        );
       }
-    } catch (error) {
-      logger.error(
-        { err: error, socketId: socket.id, userId, reason },
-        "Disconnect cleanup failed",
-      );
-    }
 
-    logger.info({ socketId: socket.id, userId, reason }, "Client disconnected");
+      logger.info(
+        { socketId: socket.id, userId, reason },
+        "Client disconnected",
+      );
+    })();
   });
 });
 
-await redisClient.connect();
-logger.info("Redis connected successfully");
+export async function startServer(): Promise<void> {
+  if (!redisClient.isOpen) {
+    await redisClient.connect();
+  }
 
-httpServer.listen(env.PORT, env.HOST, () => {
+  logger.info("Redis connected successfully");
+
+  await new Promise<void>((resolve, reject) => {
+    const onListening = () => {
+      httpServer.off("error", onError);
+      resolve();
+    };
+
+    const onError = (error: Error) => {
+      httpServer.off("listening", onListening);
+      reject(error);
+    };
+
+    httpServer.once("listening", onListening);
+    httpServer.once("error", onError);
+    httpServer.listen(env.PORT, env.HOST);
+  });
+
   logger.info({ host: env.HOST, port: env.PORT }, "PulseHub server started");
-});
+}
 
 let isShuttingDown = false;
 
-async function shutdown(signal: NodeJS.Signals) {
+export async function shutdown(signal: NodeJS.Signals): Promise<void> {
   if (isShuttingDown) return;
   isShuttingDown = true;
 
   logger.info({ signal }, "Graceful shutdown started");
 
   try {
-    await new Promise<void>((resolve) => {
-      io.close(() => resolve());
-    });
+    if (httpServer.listening) {
+      await new Promise<void>((resolve, reject) => {
+        io.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
+    }
 
     if (redisClient.isOpen) {
       await redisClient.quit();
@@ -172,10 +223,17 @@ async function shutdown(signal: NodeJS.Signals) {
   }
 }
 
-process.once("SIGINT", () => {
-  void shutdown("SIGINT");
-});
+if (process.env.NODE_ENV !== "test") {
+  void startServer().catch((error) => {
+    logger.error({ err: error }, "PulseHub startup failed");
+    process.exitCode = 1;
+  });
 
-process.once("SIGTERM", () => {
-  void shutdown("SIGTERM");
-});
+  process.once("SIGINT", () => {
+    void shutdown("SIGINT");
+  });
+
+  process.once("SIGTERM", () => {
+    void shutdown("SIGTERM");
+  });
+}

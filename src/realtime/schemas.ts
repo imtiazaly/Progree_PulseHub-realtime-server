@@ -14,3 +14,8 @@ export const sendMessageSchema = z.object({
   channel: channelNameSchema,
   content: z.string().trim().min(1).max(2000),
 });
+
+export const getMessageHistorySchema = z.object({
+  channel: channelNameSchema,
+  count: z.number().int().min(1).max(100).default(50),
+});
