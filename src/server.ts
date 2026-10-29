@@ -5,11 +5,30 @@ import { env } from "./config/env.js";
 import { logger } from "./infrastructure/logging/logger.js";
 import { redisClient } from "./infrastructure/redis/redis.js";
 import { joinChannelSchema, sendMessageSchema } from "./realtime/schemas.js";
+import { verifyAccessToken } from "./realtime/auth.js";
 
 const app = express();
 const httpServer = createServer(app);
 
 const io = new Server(httpServer);
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+
+  if (typeof token !== "string" || !token) {
+    next(new Error("Authentication required"));
+    return;
+  }
+
+  try {
+    const user = verifyAccessToken(token);
+
+    socket.data.userId = user.userId;
+    next();
+  } catch {
+    next(new Error("Invalid or expired token"));
+  }
+});
 
 app.get("/health", (_req, res) => {
   res.status(200).json({
