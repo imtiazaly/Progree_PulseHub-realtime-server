@@ -11,6 +11,7 @@ const { redisClientMock } = vi.hoisted(() => ({
     sRem: vi.fn(),
     sCard: vi.fn(),
     xAdd: vi.fn(),
+    xRevRange: vi.fn(),
   },
 }));
 
@@ -134,6 +135,78 @@ describe("Socket.IO integration", () => {
     await expect(joinChannel(socket, "general")).resolves.toEqual({
       success: true,
       channel: "general",
+    });
+  });
+
+  it("returns channel history in chronological order", async () => {
+    const socket = connectClient(createToken());
+    await waitForConnect(socket);
+    await joinChannel(socket, "general");
+
+    redisClientMock.xRevRange.mockResolvedValueOnce([
+      {
+        id: "2-0",
+        message: {
+          content: "Second",
+          senderId: "user-123",
+          timestamp: "2026-10-29T08:00:02.000Z",
+        },
+      },
+      {
+        id: "1-0",
+        message: {
+          content: "First",
+          senderId: "user-123",
+          timestamp: "2026-10-29T08:00:01.000Z",
+        },
+      },
+    ]);
+
+    const result = await new Promise<any>((resolve) => {
+      socket.emit(
+        "channel:history",
+        { channel: "general", count: 50 },
+        resolve,
+      );
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.messages.map((message: any) => message.content)).toEqual([
+      "First",
+      "Second",
+    ]);
+  });
+
+  it("rejects history requests from clients that have not joined the channel", async () => {
+    const socket = connectClient(createToken());
+    await waitForConnect(socket);
+
+    const result = await new Promise<any>((resolve) => {
+      socket.emit("channel:history", { channel: "general" }, resolve);
+    });
+
+    expect(result).toEqual({
+      success: false,
+      error: "Join the channel before requesting history",
+    });
+    expect(redisClientMock.xRevRange).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty list when channel history is empty", async () => {
+    const socket = connectClient(createToken());
+    await waitForConnect(socket);
+    await joinChannel(socket, "general");
+
+    redisClientMock.xRevRange.mockResolvedValueOnce([]);
+
+    const result = await new Promise<any>((resolve) => {
+      socket.emit("channel:history", { channel: "general" }, resolve);
+    });
+
+    expect(result).toEqual({
+      success: true,
+      channel: "general",
+      messages: [],
     });
   });
 

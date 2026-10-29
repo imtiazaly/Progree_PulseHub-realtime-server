@@ -4,7 +4,11 @@ import { Server } from "socket.io";
 import { env } from "./config/env.js";
 import { logger } from "./infrastructure/logging/logger.js";
 import { redisClient } from "./infrastructure/redis/redis.js";
-import { joinChannelSchema, sendMessageSchema } from "./realtime/schemas.js";
+import {
+  getMessageHistorySchema,
+  joinChannelSchema,
+  sendMessageSchema,
+} from "./realtime/schemas.js";
 import { verifyAccessToken } from "./realtime/auth.js";
 
 export const app = express();
@@ -85,6 +89,53 @@ io.on("connection", (socket) => {
     } catch (error) {
       logger.error({ err: error, socketId: socket.id }, "Channel leave failed");
       callback?.({ success: false, error: "Failed to leave channel" });
+    }
+  });
+
+  socket.on("channel:history", async (payload, callback) => {
+    try {
+      const result = getMessageHistorySchema.safeParse(payload);
+
+      if (!result.success) {
+        callback?.({ success: false, error: "Invalid history request" });
+        return;
+      }
+
+      const { channel, count } = result.data;
+
+      if (!socket.rooms.has(channel)) {
+        callback?.({
+          success: false,
+          error: "Join the channel before requesting history",
+        });
+        return;
+      }
+
+      const entries = await redisClient.xRevRange(
+        `pulsehub:channel:${channel}:messages`,
+        "+",
+        "-",
+        { COUNT: count },
+      );
+
+      const messages = (entries ?? []).reverse().map(({ id, message }) => ({
+        messageId: id,
+        channel,
+        content: message.content,
+        senderId: message.senderId,
+        timestamp: message.timestamp,
+      }));
+
+      callback?.({ success: true, channel, messages });
+    } catch (error) {
+      logger.error(
+        { err: error, socketId: socket.id },
+        "Message history retrieval failed",
+      );
+      callback?.({
+        success: false,
+        error: "Failed to retrieve message history",
+      });
     }
   });
 
