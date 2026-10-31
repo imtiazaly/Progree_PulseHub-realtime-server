@@ -2,18 +2,33 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { io as createClient, type Socket } from "socket.io-client";
 import jwt from "jsonwebtoken";
 
-const { redisClientMock } = vi.hoisted(() => ({
-  redisClientMock: {
+const { redisClientMock } = vi.hoisted(() => {
+  const createMockDuplicatedClient = () => ({
     isOpen: false,
-    connect: vi.fn(),
-    quit: vi.fn(),
-    sAdd: vi.fn(),
-    sRem: vi.fn(),
-    sCard: vi.fn(),
-    xAdd: vi.fn(),
-    xRevRange: vi.fn(),
-  },
-}));
+    connect: vi.fn().mockResolvedValue(undefined),
+    quit: vi.fn().mockResolvedValue(undefined),
+    publish: vi.fn().mockResolvedValue(1),
+    subscribe: vi.fn().mockResolvedValue(undefined),
+    pSubscribe: vi.fn().mockResolvedValue(undefined),
+    unsubscribe: vi.fn().mockResolvedValue(undefined),
+    pUnsubscribe: vi.fn().mockResolvedValue(undefined),
+    on: vi.fn(),
+  });
+
+  return {
+    redisClientMock: {
+      isOpen: false,
+      connect: vi.fn().mockResolvedValue(undefined),
+      quit: vi.fn().mockResolvedValue(undefined),
+      sAdd: vi.fn(),
+      sRem: vi.fn(),
+      sCard: vi.fn(),
+      xAdd: vi.fn(),
+      xRevRange: vi.fn(),
+      duplicate: vi.fn(createMockDuplicatedClient),
+    },
+  };
+});
 
 vi.mock("../src/infrastructure/redis/redis.js", () => ({
   redisClient: redisClientMock,
