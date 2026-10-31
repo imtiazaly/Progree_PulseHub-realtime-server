@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { io } from "socket.io-client";
 import jwt from "jsonwebtoken";
 import { env } from "../src/config/env.js";
