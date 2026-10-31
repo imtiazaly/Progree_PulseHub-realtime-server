@@ -4,7 +4,7 @@
 **Project:** Progree PulseHub Realtime Server  
 **Type:** High-Concurrency Real-Time Communication System  
 **Current Status:** Feature complete, tested locally and ready for review  
-**Language:** TypeScript (Node.js ES Modules)  
+**Language:** TypeScript (Node.js ES Modules)  V
 **Runtime:** Node.js v20+
 
 ---
