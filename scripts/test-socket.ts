@@ -1,12 +1,26 @@
 import { io } from "socket.io-client";
+import jwt from "jsonwebtoken";
+import { env } from "../src/config/env.js";
 
-const serverUrl = "http://127.0.0.1:3000";
-const channel = "pulsehub-test";
+const serverUrl = `http://${env.HOST}:${env.PORT}`;
+const channel = "general";
 
-const sender = io(serverUrl);
-const receiver = io(serverUrl);
+function generateToken(userId: string): string {
+  return jwt.sign({}, env.JWT_SECRET, {
+    subject: userId,
+    algorithm: "HS256",
+  });
+}
 
-async function joinChannel(socket: typeof sender) {
+const sender = io(serverUrl, {
+  auth: { token: generateToken("user-sender") },
+});
+
+const receiver = io(serverUrl, {
+  auth: { token: generateToken("user-receiver") },
+});
+
+async function joinChannel(socket: typeof sender, name: string) {
   return new Promise<void>((resolve, reject) => {
     socket.emit(
       "channel:join",
@@ -16,7 +30,7 @@ async function joinChannel(socket: typeof sender) {
           reject(new Error(response.error ?? "Channel join failed"));
           return;
         }
-
+        console.log(`[${name}] joined channel: ${channel}`);
         resolve();
       },
     );
@@ -36,10 +50,14 @@ async function testMessaging() {
       }),
     ]);
 
-    await Promise.all([joinChannel(sender), joinChannel(receiver)]);
-    console.log("Both clients joined the channel.");
+    console.log("Both clients authenticated & connected via Socket.IO.");
 
-    const receivedMessage = new Promise<unknown>((resolve, reject) => {
+    await Promise.all([
+      joinChannel(sender, "Sender"),
+      joinChannel(receiver, "Receiver"),
+    ]);
+
+    const messagePromise = new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(
         () => reject(new Error("Message reception timed out")),
         5000,
@@ -53,13 +71,15 @@ async function testMessaging() {
 
     sender.emit(
       "message:send",
-      { channel, content: "PulseHub test message" },
-      (response: { success: boolean; error?: string }) => {
-        console.log("Send acknowledgement:", response);
+      { channel, content: "Hello from PulseHub Single Instance!" },
+      (ack: { success: boolean; error?: string; messageId?: string }) => {
+        console.log("Send acknowledgement:", ack);
       },
     );
 
-    console.log("Received message:", await receivedMessage);
+    const received = await messagePromise;
+    console.log("Receiver received message:", received);
+    console.log("\n>>> SINGLE-INSTANCE VERIFICATION PASSED <<<\n");
   } finally {
     sender.disconnect();
     receiver.disconnect();
@@ -68,5 +88,5 @@ async function testMessaging() {
 
 testMessaging().catch((error: unknown) => {
   console.error("Messaging test failed:", error);
-  testMessaging().catch(console.error);
+  process.exit(1);
 });
