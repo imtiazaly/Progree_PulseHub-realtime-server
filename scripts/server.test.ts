@@ -56,6 +56,7 @@ const secret = "test-secret-key-that-is-at-least-32-characters";
 let address: string;
 let clientSockets: Socket[] = [];
 let closeServer: (() => Promise<void>) | undefined;
+let loggerInfo: ReturnType<typeof vi.fn>;
 
 function createToken(subject = "user-123") {
   return jwt.sign({}, secret, {
@@ -104,6 +105,8 @@ beforeAll(async () => {
 
   const { httpServer, startServer, shutdown } =
     await import("../src/server.js");
+  const loggerModule = await import("../src/infrastructure/logging/logger.js");
+  loggerInfo = loggerModule.logger.info as unknown as ReturnType<typeof vi.fn>;
 
   await startServer();
 
@@ -261,5 +264,29 @@ describe("Socket.IO integration", () => {
       content: "Hello PulseHub",
       senderId: "sender-1",
     });
+  });
+
+  it("logs a transaction entry with a timestamp for every sent message", async () => {
+    const sender = connectClient(createToken("logger-1"));
+    await waitForConnect(sender);
+    await joinChannel(sender, "audit");
+
+    await new Promise((resolve) => {
+      sender.emit(
+        "message:send",
+        { channel: "audit", content: "log me" },
+        resolve,
+      );
+    });
+
+    expect(loggerInfo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "message:send",
+        channel: "audit",
+        senderId: "logger-1",
+        timestamp: expect.any(String),
+      }),
+      "Message transaction",
+    );
   });
 });

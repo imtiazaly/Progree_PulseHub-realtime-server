@@ -3,7 +3,7 @@
 **Project Codeword:** `PULSEHUB-REDIS-ADAPTER`  
 **Project:** Progree PulseHub Realtime Server  
 **Type:** High-Concurrency Real-Time Communication System  
-**Current Status:** Production Verified & Submission Ready  
+**Current Status:** Feature complete, tested locally and ready for review  
 **Language:** TypeScript (Node.js ES Modules)  
 **Runtime:** Node.js v20+
 
@@ -11,7 +11,7 @@
 
 ## 1. System Overview
 
-PulseHub is an enterprise-grade real-time messaging backend engineered for high concurrency, horizontal scalability, and low-latency bidirectional communication using **Socket.IO** and **Redis**.
+PulseHub is a real-time messaging backend built with **Socket.IO** and **Redis**. It supports many chat channels, runs on more than one server instance at the same time, and keeps a persistent log file of every message transaction.
 
 The server implements JWT-authenticated WebSocket handshakes, channel-based message isolation, Redis Streams message persistence, active presence tracking via Redis Sets, connection-level rate limiting, and multi-instance synchronization using the **Socket.IO Redis Adapter**.
 
@@ -35,7 +35,7 @@ The server implements JWT-authenticated WebSocket handshakes, channel-based mess
                        +-----------------+-----------------+
                                          |
                +-------------------------v-------------------------+
-               |                  REDIS CLUSTER                    |
+               |                  REDIS SERVER                     |
                |                                                   |
                |  - Redis Pub/Sub: Cross-instance broadcast adapter|
                |  - Redis Streams: Channel message persistence     |
@@ -48,7 +48,7 @@ The server implements JWT-authenticated WebSocket handshakes, channel-based mess
 - **Message Persistence & History:** Messages are written to Redis Streams (`XADD`) with millisecond timestamps and unique IDs, enabling chronological retrieval (`XREVRANGE`).
 - **Presence Tracking:** Redis Sets maintain active users (`pulsehub:active-users`) and individual socket mappings (`pulsehub:user:{id}:connections`).
 - **Graceful Lifecycle Management:** Traps `SIGINT`/`SIGTERM` to drain active sockets and safely terminate Redis client connections.
-- **Structured Observability:** Dual-stream Pino logging (simultaneous console stdout and persistent log files at `logs/pulsehub.log`).
+- **Transaction Logging:** Pino writes to the console and to `logs/pulsehub.log`. Every sent message, channel join, channel leave, connect and disconnect is written as one JSON line with an ISO timestamp (message content is not logged, only its length).
 
 ---
 
@@ -84,9 +84,10 @@ The server implements JWT-authenticated WebSocket handshakes, channel-based mess
 
 ### Messaging & Persistence
 - [x] Real-time message exchange (`message:send` -> `message:receive`).
-- [x] Redis Streams persistence (`pulsehub:channel:{channel}:messages`).
+- [x] Redis Streams persistence (`pulsehub:channel:{channel}:messages`), trimmed to about 10,000 messages per channel.
 - [x] Historical message retrieval with chronological order (`channel:history`).
 - [x] Auto-generated message IDs and ISO-8601 timestamps.
+- [x] File log entry with timestamp for every message (`event: message:send`).
 
 ### Horizontal Scaling & High Availability
 - [x] Integration of `@socket.io/redis-adapter` with dedicated Redis Publisher and Subscriber connections.
@@ -106,7 +107,7 @@ The server implements JWT-authenticated WebSocket handshakes, channel-based mess
 
 ## 5. Verification & Test Results
 
-All verification suites have been executed and passed with 100% compliance:
+All checks below were run and passed:
 
 ### 1. Automated Unit & Integration Tests (Vitest)
 ```bash
@@ -115,7 +116,7 @@ npm test
 - `scripts/rate-limit.test.ts` (4/4 passed)
 - `scripts/auth.test.ts` (4/4 passed)
 - `scripts/server.test.ts` (7/7 passed)
-- **Total: 15 / 15 Tests Passed (100%)**
+- **Total: 16 / 16 tests passed.** The unit and integration tests use a mocked Redis client. Real Redis is covered by the end-to-end scripts below.
 
 ### 2. TypeScript Static Typecheck
 ```bash
@@ -167,6 +168,10 @@ Using Docker Desktop:
 ```powershell
 docker run -d --name pulsehub-redis -p 6379:6379 redis:alpine
 ```
+Or with Docker Compose:
+```powershell
+docker compose up -d
+```
 Or start an existing container:
 ```powershell
 docker start pulsehub-redis
@@ -180,7 +185,7 @@ HOST=127.0.0.1
 PORT=3000
 REDIS_URL=redis://127.0.0.1:6379
 LOG_LEVEL=info
-JWT_SECRET=sjdkgibmklopswerfjgkymnvbxsdhfky
+JWT_SECRET=replace-with-a-random-string-of-at-least-32-characters
 ```
 
 ### Step 3: Run in Development Mode
@@ -188,7 +193,14 @@ JWT_SECRET=sjdkgibmklopswerfjgkymnvbxsdhfky
 npm run dev
 ```
 
-### Step 4: Health Check
+### Step 4: Create a test token
+The server only verifies tokens. For testing, create one with:
+```powershell
+npm run token -- alice
+```
+Use it as `auth: { token }` when connecting with `socket.io-client`.
+
+### Step 5: Health Check
 ```powershell
 curl http://127.0.0.1:3000/health
 ```
@@ -211,7 +223,8 @@ Progree_PulseHub-realtime-server/
 │   ├── server.test.ts         # Socket.IO & Redis integration tests
 │   ├── test-socket.ts         # Single-instance E2E runner
 │   ├── verify-multi-instance.ts # Multi-instance Redis adapter runner
-│   └── test-rate-limit.ts     # Rate limit integration runner
+│   ├── test-rate-limit.ts     # Rate limit integration runner
+│   └── generate-token.ts      # Creates a test JWT
 ├── src/
 │   ├── config/
 │   │   └── env.ts             # Zod environment variable parsing
@@ -225,6 +238,7 @@ Progree_PulseHub-realtime-server/
 │   │   ├── rate-limit.ts      # Sliding token window rate limiter
 │   │   └── schemas.ts         # Zod schemas for socket payloads
 │   └── server.ts              # Express & Socket.IO server with Redis adapter
+├── docker-compose.yml         # Redis for local development
 ├── package.json
 ├── tsconfig.json
 └── README.md
@@ -232,6 +246,12 @@ Progree_PulseHub-realtime-server/
 
 ---
 
-## 8. License
+## 8. Known Limitations
+- The rate limiter is in memory, so the limit applies per server instance, not across the whole cluster.
+- Any logged in user can join any channel. There are no private channels or roles.
+- Presence entries in Redis are cleaned on disconnect. If a server crashes, its entries stay until they are removed by hand.
+- There is no endpoint to issue tokens. Tokens are expected to come from a separate login service.
+
+## 9. License
 
 ISC License. Built for Progree PulseHub Realtime System.

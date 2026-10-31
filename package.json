@@ -8,7 +8,8 @@
     "dev": "tsx watch src/server.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "token": "tsx scripts/generate-token.ts"
   },
   "repository": {
     "type": "git",
@@ -22,7 +23,7 @@
     "url": "https://github.com/imtiazaly/Progree_PulseHub-realtime-server/issues"
   },
   "homepage": "https://github.com/imtiazaly/Progree_PulseHub-realtime-server#readme",
-  "private": "true",
+  "private": true,
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
     "dotenv": "^18.0.9",

@@ -14,6 +14,8 @@ import { verifyAccessToken } from "./realtime/auth.js";
 import { isMessageRateLimited } from "./realtime/rate-limit.js";
 import { createAdapter } from "@socket.io/redis-adapter";
 
+const MAX_STREAM_LENGTH = 10_000;
+
 export const app = express();
 export const httpServer = createServer(app);
 export const io = new Server(httpServer);
@@ -74,6 +76,10 @@ io.on("connection", (socket) => {
       }
 
       await socket.join(result.data.channel);
+      logger.info(
+        { event: "channel:join", socketId: socket.id, userId, channel: result.data.channel },
+        "Channel transaction",
+      );
       callback?.({ success: true, channel: result.data.channel });
     } catch (error) {
       logger.error({ err: error, socketId: socket.id }, "Channel join failed");
@@ -91,6 +97,10 @@ io.on("connection", (socket) => {
       }
 
       await socket.leave(result.data.channel);
+      logger.info(
+        { event: "channel:leave", socketId: socket.id, userId, channel: result.data.channel },
+        "Channel transaction",
+      );
       callback?.({ success: true, channel: result.data.channel });
     } catch (error) {
       logger.error({ err: error, socketId: socket.id }, "Channel leave failed");
@@ -183,6 +193,25 @@ io.on("connection", (socket) => {
           senderId: userId,
           timestamp,
         },
+        {
+          TRIM: {
+            strategy: "MAXLEN",
+            strategyModifier: "~",
+            threshold: MAX_STREAM_LENGTH,
+          },
+        },
+      );
+
+      logger.info(
+        {
+          event: "message:send",
+          messageId,
+          channel,
+          senderId: userId,
+          contentLength: content.length,
+          timestamp,
+        },
+        "Message transaction",
       );
 
       io.to(channel).emit("message:receive", {
